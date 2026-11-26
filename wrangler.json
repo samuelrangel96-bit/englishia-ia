@@ -1,12 +1,11 @@
 {
   "name": "englishia-iao",
   "compatibility_date": "2024-10-22",
-  "main": "./src/index.ts",
+  "ai": {
+    "binding": "AI"
+  },
   "assets": {
     "directory": "./dist/client",
     "not_found_handling": "single-page-application"
-  },
-  "ai": {
-    "binding": "AI"
   }
 }
