@@ -1,107 +1,117 @@
 
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 
-interface AIResult {
-  response?: string;
-}
+type ChatRole = "system" | "user" | "assistant";
 
-interface AIModel {
-  run(
-    model: string,
-    options: {
-      messages: Array<{
-        role: "system" | "user" | "assistant";
-        content: string;
-      }>;
-      max_tokens?: number;
-    }
-  ): Promise<AIResult>;
-}
+type ChatMessage = {
+  role: ChatRole;
+  content: string;
+};
 
 type Bindings = {
-  AI: AIModel;
+  AI: {
+    run(
+      model: string,
+      options: {
+        messages: ChatMessage[];
+        max_tokens: number;
+      }
+    ): Promise<{ response?: string }>;
+  };
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-const MODEL = "@cf/meta/llama-3.1-8b-instruct";
+const MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8";
 
-const TEACHER_PROMPT = `
-You are English AI, a friendly and natural English teacher.
+app.use(
+  "/api/*",
+  cors({
+    origin: "*",
+    allowMethods: ["GET", "POST", "OPTIONS"],
+    allowHeaders: ["Content-Type"],
+  })
+);
 
-Your job:
-1. Continue conversations naturally. Never just repeat what the student says.
-2. Answer the student's message with a relevant response.
-3. Ask a natural follow-up question when appropriate.
-4. Correct English mistakes gently AFTER answering.
-5. Explain corrections briefly in Brazilian Portuguese.
-6. Adapt your English to the student's level.
-7. Encourage the student to speak more.
-8. Do not invent corrections when the sentence is already correct.
-
-Use this format when a correction is needed:
-
-[Your natural response in English]
-
-Correction: [corrected sentence]
-Explanation: [short explanation in Portuguese]
-
-Keep conversations friendly and natural.
-`;
-
-app.get("/api/", (c) => {
+app.get("/api/health", (c) => {
   return c.json({
-    name: "English AI",
     status: "online",
-    message: "Professor de inglês disponível"
+    app: "English AI",
+    ai: "configured"
   });
 });
 
 app.post("/api/chat", async (c) => {
   try {
     const body = await c.req.json<{
-      message?: string;
-      history?: Array<{
-        role: string;
-        content: string;
-      }>;
+      message?: unknown;
+      history?: unknown[];
     }>();
 
-    const message = body.message?.trim();
-
-    if (!message) {
+    if (
+      typeof body.message !== "string" ||
+      !body.message.trim()
+    ) {
       return c.json({ error: "Digite uma mensagem." }, 400);
     }
 
-    if (!c.env.AI) {
+    const message = body.message.trim();
+
+    if (message.length > 2000) {
       return c.json({
-        error: "Workers AI não está conectado. Configure o binding AI."
-      }, 503);
+        error: "A mensagem deve ter até 2000 caracteres."
+      }, 400);
     }
 
-    const history = Array.isArray(body.history)
-      ? body.history
-          .filter(
-            (item) =>
-              (item.role === "user" ||
-                item.role === "assistant") &&
-              typeof item.content === "string"
-          )
-          .slice(-12)
-          .map((item) => ({
-            role: item.role as "user" | "assistant",
-            content: item.content.slice(0, 3000)
-          }))
-      : [];
+    const history: ChatMessage[] = (body.history ?? [])
+      .filter((item): item is ChatMessage => {
+        if (!item || typeof item !== "object") return false;
 
-    const messages = [
+        const value = item as Record<string, unknown>;
+
+        return (
+          (value.role === "user" || value.role === "assistant") &&
+          typeof value.content === "string"
+        );
+      })
+      .slice(-12)
+      .map((item) => ({
+        role: item.role,
+        content: item.content.slice(0, 2000)
+      }));
+
+    const messages: ChatMessage[] = [
       {
-        role: "system" as const,
-        content: TEACHER_PROMPT
+        role: "system",
+        content: `
+You are English AI, a friendly and natural English teacher.
+
+RULES:
+- Continue the conversation naturally.
+- Never simply repeat the student's message.
+- Answer the student's actual question.
+- Speak in simple, natural English.
+- Ask a relevant follow-up question when appropriate.
+- Correct mistakes AFTER answering.
+- Explain corrections briefly in Brazilian Portuguese.
+- If the student's English is correct, say something encouraging.
+- Adapt to beginner and intermediate students.
+
+Use this format:
+
+Natural response in English.
+
+Correção: (only when necessary)
+Corrected sentence: ...
+Explanation: (brief explanation in Portuguese)
+
+Keep the conversation friendly and educational.
+`
       },
       ...history,
       {
-        role: "user" as const,
+        role: "user",
         content: message
       }
     ];
@@ -111,79 +121,87 @@ app.post("/api/chat", async (c) => {
       max_tokens: 500
     });
 
-    const reply = result.response?.trim();
-
-    if (!reply) {
+    if (!result.response?.trim()) {
       return c.json({
-        error: "O professor não conseguiu gerar uma resposta."
+        error: "O professor não conseguiu responder."
       }, 502);
     }
 
-    return c.json({ reply });
+    return c.json({
+      reply: result.response.trim()
+    });
 
   } catch (error) {
-    console.error("Chat error:", error);
+    console.error("CHAT ERROR:", error);
 
     return c.json({
-      error: "Erro ao conversar com o professor."
+      error: "Falha ao conectar com o professor."
     }, 500);
   }
 });
 
 app.post("/api/translate", async (c) => {
   try {
-    const body = await c.req.json<{
-      text?: string;
-    }>();
+    const body = await c.req.json<{ text?: unknown }>();
 
-    const text = body.text?.trim();
-
-    if (!text) {
-      return c.json({
-        error: "Digite um texto para traduzir."
-      }, 400);
+    if (
+      typeof body.text !== "string" ||
+      !body.text.trim()
+    ) {
+      return c.json({ error: "Digite um texto." }, 400);
     }
 
-    if (!c.env.AI) {
+    if (body.text.length > 5000) {
       return c.json({
-        error: "Workers AI não está conectado. Configure o binding AI."
-      }, 503);
+        error: "O texto deve ter até 5000 caracteres."
+      }, 400);
     }
 
     const result = await c.env.AI.run(MODEL, {
       messages: [
         {
           role: "system",
-          content:
-            "Translate the user's text into Brazilian Portuguese. " +
-            "Preserve the original meaning and tone. " +
-            "Return only the translation."
+          content: `
+You are a professional English-Portuguese translator.
+
+Detect the language automatically:
+- If the input is English, translate into Brazilian Portuguese.
+- If the input is Portuguese, translate into natural English.
+- Preserve the original meaning and tone.
+- Return only the translation.
+`
         },
         {
           role: "user",
-          content: text.slice(0, 5000)
+          content: body.text.trim()
         }
       ],
-      max_tokens: 500
+      max_tokens: 700
     });
 
-    const translation = result.response?.trim();
-
-    if (!translation) {
+    if (!result.response?.trim()) {
       return c.json({
-        error: "Não foi possível realizar a tradução."
+        error: "Não foi possível traduzir."
       }, 502);
     }
 
-    return c.json({ translation });
+    return c.json({
+      translation: result.response.trim()
+    });
 
   } catch (error) {
-    console.error("Translation error:", error);
+    console.error("TRANSLATE ERROR:", error);
 
     return c.json({
-      error: "Erro ao traduzir o texto."
+      error: "Falha na tradução."
     }, 500);
   }
+});
+
+app.notFound((c) => {
+  return c.json({
+    error: "Rota não encontrada."
+  }, 404);
 });
 
 export default app;
