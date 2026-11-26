@@ -1,4 +1,3 @@
-
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
@@ -10,20 +9,12 @@ type ChatMessage = {
 };
 
 type Bindings = {
-  AI: {
-    run(
-      model: string,
-      options: {
-        messages: ChatMessage[];
-        max_tokens: number;
-      }
-    ): Promise<{ response?: string }>;
-  };
+  AI: Ai;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-const MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8";
+const MODEL = "@cf/meta/llama-3.1-8b-instruct";
 
 app.use(
   "/api/*",
@@ -38,7 +29,8 @@ app.get("/api/health", (c) => {
   return c.json({
     status: "online",
     app: "English AI",
-    ai: "configured"
+    ai: "configured",
+    model: MODEL
   });
 });
 
@@ -67,9 +59,7 @@ app.post("/api/chat", async (c) => {
     const history: ChatMessage[] = (body.history ?? [])
       .filter((item): item is ChatMessage => {
         if (!item || typeof item !== "object") return false;
-
         const value = item as Record<string, unknown>;
-
         return (
           (value.role === "user" || value.role === "assistant") &&
           typeof value.content === "string"
@@ -84,8 +74,7 @@ app.post("/api/chat", async (c) => {
     const messages: ChatMessage[] = [
       {
         role: "system",
-        content: `
-You are English AI, a friendly and natural English teacher.
+        content: `You are English AI, a friendly and natural English teacher.
 
 RULES:
 - Continue the conversation naturally.
@@ -106,8 +95,7 @@ Correção: (only when necessary)
 Corrected sentence: ...
 Explanation: (brief explanation in Portuguese)
 
-Keep the conversation friendly and educational.
-`
+Keep the conversation friendly and educational.`
       },
       ...history,
       {
@@ -119,11 +107,12 @@ Keep the conversation friendly and educational.
     const result = await c.env.AI.run(MODEL, {
       messages,
       max_tokens: 500
-    });
+    }) as { response: string };
 
-    if (!result.response?.trim()) {
+    if (!result?.response?.trim()) {
+      console.error("EMPTY AI RESPONSE:", result);
       return c.json({
-        error: "O professor não conseguiu responder."
+        error: "O professor não conseguiu responder. Tente novamente."
       }, 502);
     }
 
@@ -133,9 +122,9 @@ Keep the conversation friendly and educational.
 
   } catch (error) {
     console.error("CHAT ERROR:", error);
-
     return c.json({
-      error: "Falha ao conectar com o professor."
+      error: "Falha ao conectar com o professor. Verifique o modelo de IA.",
+      details: String(error)
     }, 500);
   }
 });
@@ -161,15 +150,12 @@ app.post("/api/translate", async (c) => {
       messages: [
         {
           role: "system",
-          content: `
-You are a professional English-Portuguese translator.
-
+          content: `You are a professional English-Portuguese translator.
 Detect the language automatically:
 - If the input is English, translate into Brazilian Portuguese.
 - If the input is Portuguese, translate into natural English.
 - Preserve the original meaning and tone.
-- Return only the translation.
-`
+- Return only the translation.`
         },
         {
           role: "user",
@@ -177,9 +163,9 @@ Detect the language automatically:
         }
       ],
       max_tokens: 700
-    });
+    }) as { response: string };
 
-    if (!result.response?.trim()) {
+    if (!result?.response?.trim()) {
       return c.json({
         error: "Não foi possível traduzir."
       }, 502);
@@ -191,9 +177,9 @@ Detect the language automatically:
 
   } catch (error) {
     console.error("TRANSLATE ERROR:", error);
-
     return c.json({
-      error: "Falha na tradução."
+      error: "Falha na tradução.",
+      details: String(error)
     }, 500);
   }
 });
