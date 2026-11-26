@@ -8,16 +8,17 @@ type Message = {
 };
 
 function App() {
-  const [message, setMessage] = useState("");
   const [history, setHistory] = useState<Message[]>([]);
+  const [message, setMessage] = useState("");
   const [translation, setTranslation] = useState("");
   const [translated, setTranslated] = useState("");
   const [loading, setLoading] = useState(false);
+  const [translating, setTranslating] = useState(false);
   const [listening, setListening] = useState(false);
-  const [status, setStatus] = useState("Aguardando você começar...");
+  const [status, setStatus] = useState("Pronto para conversar!");
   const recognition = useRef<any>(null);
 
-  async function api(path: string, data: object) {
+  async function requestAPI(path: string, data: object) {
     const response = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -27,7 +28,7 @@ function App() {
     const result = await response.json();
 
     if (!response.ok) {
-      throw new Error(result.error || "Erro no servidor");
+      throw new Error(result.error || "Erro na conexão.");
     }
 
     return result;
@@ -38,11 +39,17 @@ function App() {
 
     window.speechSynthesis.cancel();
 
-    const voice = new SpeechSynthesisUtterance(text);
-    voice.lang = "en-US";
-    voice.rate = 0.9;
+    const englishPart = text.split(
+      /(?:Correção|Correction|Explicação|Explanation):/i
+    )[0].trim();
 
-    window.speechSynthesis.speak(voice);
+    if (!englishPart) return;
+
+    const utterance = new SpeechSynthesisUtterance(englishPart);
+    utterance.lang = "en-US";
+    utterance.rate = 0.9;
+
+    window.speechSynthesis.speak(utterance);
   }
 
   async function sendMessage(text?: string) {
@@ -50,36 +57,34 @@ function App() {
 
     if (!current || loading) return;
 
+    const previousHistory = history;
+
     setLoading(true);
     setMessage("");
 
-    setHistory((old) => [
-      ...old,
-      { role: "user", content: current },
-    ]);
-
     try {
-      const data = await api("/api/chat", {
+      const data = await requestAPI("/api/chat", {
         message: current,
-        history: history,
+        history: previousHistory,
       });
 
-      if (!data.reply) throw new Error("Resposta vazia");
+      if (!data.reply) throw new Error("Resposta vazia.");
 
-      setHistory((old) => [
-        ...old,
+      setHistory([
+        ...previousHistory,
+        { role: "user", content: current },
         { role: "assistant", content: data.reply },
       ]);
 
       speak(data.reply);
-
     } catch (error: any) {
-      setHistory((old) => [
-        ...old,
+      setHistory([
+        ...previousHistory,
+        { role: "user", content: current },
         {
           role: "assistant",
           content: "Não consegui conectar ao professor. " +
-            (error.message || "Tente novamente."),
+            error.message,
         },
       ]);
     } finally {
@@ -93,11 +98,11 @@ function App() {
       (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      setStatus("Use o Google Chrome para reconhecimento de voz.");
+      setStatus("Reconhecimento de voz indisponível. Use o Chrome.");
       return;
     }
 
-    if (listening) return;
+    if (listening || loading) return;
 
     const instance = new SpeechRecognition();
 
@@ -108,7 +113,7 @@ function App() {
     instance.onresult = (event: any) => {
       const text = event.results[0][0].transcript;
       setStatus("Você disse: " + text);
-      sendMessage(text);
+      void sendMessage(text);
     };
 
     instance.onerror = (event: any) => {
@@ -127,50 +132,56 @@ function App() {
       setListening(true);
       setStatus("Estou ouvindo você...");
     } catch {
-      setStatus("Não foi possível iniciar o microfone.");
       setListening(false);
+      setStatus("Não foi possível iniciar o microfone.");
     }
   }
 
   function stopVoice() {
-    if (recognition.current) {
-      recognition.current.stop();
-    }
-
+    recognition.current?.stop();
     window.speechSynthesis?.cancel();
     setListening(false);
     setStatus("Conversa pausada.");
   }
 
   async function translateText() {
-    if (!translation.trim()) return;
+    if (!translation.trim() || translating) return;
 
+    setTranslating(true);
     setTranslated("Traduzindo...");
 
     try {
-      const data = await api("/api/translate", {
+      const data = await requestAPI("/api/translate", {
         text: translation,
       });
 
       setTranslated(data.translation);
-    } catch {
-      setTranslated("Erro ao traduzir. Verifique o servidor.");
+    } catch (error: any) {
+      setTranslated("Erro: " + error.message);
+    } finally {
+      setTranslating(false);
     }
   }
 
   return (
-    <main className="english-app">
-      <header className="app-header">
+    <main className="app">
+
+      <header className="header">
+        <div className="brand-icon">AI</div>
         <h1>English AI</h1>
-        <p>Seu professor particular de inglês com IA</p>
+        <p>Seu professor particular de inglês</p>
+        <span className="online">● Seu aprendizado começa aqui</span>
       </header>
 
-      <section className="app-card">
+      <section className="card">
         <h2>🎙️ Conversação</h2>
-        <p>Pratique inglês falando naturalmente.</p>
+        <p>Fale em inglês e pratique com seu professor.</p>
 
-        <button className="primary" onClick={startVoice}
-          disabled={listening}>
+        <button
+          className="primary"
+          onClick={startVoice}
+          disabled={listening || loading}
+        >
           {listening ? "Ouvindo você..." : "Começar a falar"}
         </button>
 
@@ -181,15 +192,21 @@ function App() {
         <p className="status">{status}</p>
       </section>
 
-      <section className="app-card">
+      <section className="card">
         <h2>💬 Professor de inglês</h2>
+        <p>Converse naturalmente e receba correções.</p>
 
-        <div className="chat-history">
+        <div className="chat">
+          {history.length === 0 && (
+            <div className="welcome">
+              Hello! I'm your English teacher.
+              <br />
+              What would you like to talk about today?
+            </div>
+          )}
+
           {history.map((item, index) => (
-            <div
-              key={index}
-              className={"chat-message " + item.role}
-            >
+            <div key={index} className={`bubble ${item.role}`}>
               <strong>
                 {item.role === "user" ? "Você" : "Professor"}
               </strong>
@@ -197,43 +214,64 @@ function App() {
             </div>
           ))}
 
-          {loading && <p>Professor está pensando...</p>}
+          {loading && (
+            <div className="thinking">Professor está pensando...</div>
+          )}
         </div>
 
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          placeholder="Escreva sua frase em inglês..."
+          placeholder="Write something in English..."
         />
 
         <button
           className="primary"
-          onClick={() => sendMessage()}
+          onClick={() => void sendMessage()}
           disabled={loading || !message.trim()}
         >
-          Enviar mensagem
+          {loading ? "Enviando..." : "Enviar mensagem"}
+        </button>
+
+        <button
+          className="secondary"
+          onClick={() => setHistory([])}
+        >
+          Nova conversa
         </button>
       </section>
 
-      <section className="app-card">
-        <h2>🌎 Tradutor</h2>
+      <section className="card">
+        <h2>🌎 Tradutor inteligente</h2>
+        <p>Traduza entre português e inglês.</p>
 
         <input
           value={translation}
           onChange={(e) => setTranslation(e.target.value)}
-          placeholder="Digite uma frase para traduzir"
+          placeholder="Digite sua frase..."
         />
 
-        <button className="primary" onClick={translateText}>
-          Traduzir
+        <button
+          className="primary"
+          onClick={() => void translateText()}
+          disabled={translating || !translation.trim()}
+        >
+          {translating ? "Traduzindo..." : "Traduzir"}
         </button>
 
-        <p className="translation-result">{translated}</p>
+        {translated && (
+          <div className="translation">
+            <strong>Tradução:</strong>
+            <p>{translated}</p>
+          </div>
+        )}
       </section>
 
       <footer>
-        <p>English AI • Aprenda inglês conversando</p>
+        English AI © 2026
+        <p>Aprenda inglês no seu ritmo.</p>
       </footer>
+
     </main>
   );
 }
